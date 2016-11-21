@@ -20,5 +20,6 @@ defmodule Condet.Destination do
     struct
     |> cast(params, [:asn, :ipv4_v6, :geolocation, :packet_type, :service])
     |> validate_required([:ipv4_v6])
+    |> unique_constraint(:ipv4_v6)
   end
 end
