@@ -8,6 +8,7 @@ defmodule MeasurementWorker do
   alias Condet.PacketLoss
   alias Condet.PathAssignment
   alias Condet.Path
+  alias Condet.Congestion
   alias Condet.Repo
 
   def start_link(_) do
@@ -19,6 +20,7 @@ defmodule MeasurementWorker do
     case type do
       "udp" ->
         # Tracerout using UDP-Paris
+        Logger.debug "UDP"
         out = System.cmd "scamper", ["-i",ip]
         udp_trace = Kernel.elem out, 0
       "icmp" ->
@@ -198,11 +200,9 @@ defmodule MeasurementWorker do
         dest_geoloc = Enum.into(temp, [], fn x -> {val, _} = Float.parse x
                                           val end)
         distance = Geocalc.distance_between(default_geoloc, dest_geoloc)
-        Logger.debug distance
-        speed = 3*:math.pow(10,8)
+        speed = 0.66*3*:math.pow(10,8)
         # Min RTT in ms = 2 * Distance/Speed of propagation * 1000
         geo_min_RTT = 2*distance/speed*1000
-        Logger.debug geo_min_RTT
       end
       
       if packets_received > 0 do
@@ -241,6 +241,28 @@ defmodule MeasurementWorker do
               false ->
                 # If already present, modify old values
 
+                # First check for Congestion w.r.t Average, Average w.time weight and Geolocation
+                if(avg_ping > (1.5 * rtt_to_be_changed.average)) do
+                  # Insert as Congested in Database
+                  congestion_detected = %{ipv4_v6: current_dest.ipv4_v6, path_id: current_assignment.path_id, type: "01_AVERAGE"}
+                  changeset = Congestion.changeset(%Congestion{}, congestion_detected)
+                  {:ok, _result} = Repo.insert(changeset)
+                end
+
+                if(avg_ping > (1.5 * rtt_to_be_changed.average_with_time_weight)) do
+                  # Insert as Congested in Database
+                  congestion_detected = %{ipv4_v6: current_dest.ipv4_v6, path_id: current_assignment.path_id, type: "02_AVERAGE_WITH_TIME_WEIGHT"}
+                  changeset = Congestion.changeset(%Congestion{}, congestion_detected)
+                  {:ok, _result} = Repo.insert(changeset)
+                end
+
+                if(avg_ping > (1.5 * geo_min_RTT)) do
+                  # Insert as Congested in Database
+                  congestion_detected = %{ipv4_v6: current_dest.ipv4_v6, path_id: current_assignment.path_id, type: "04_GEOLOCATION"}
+                  changeset = Congestion.changeset(%Congestion{}, congestion_detected)
+                  {:ok, _result} = Repo.insert(changeset)
+                end
+
                 #Check for all time small
                 if rtt_to_be_changed.all_time_small < min_ping do 
                   min_ping = rtt_to_be_changed.all_time_small
@@ -251,6 +273,11 @@ defmodule MeasurementWorker do
                 if rtt_to_be_changed.all_time_big > max_ping do 
                   max_ping = rtt_to_be_changed.all_time_big 
                   big_update = rtt_to_be_changed.all_time_big_updated_at
+
+                  # Insert as Congested in Database
+                  congestion_detected = %{ipv4_v6: current_dest.ipv4_v6, path_id: current_assignment.path_id, type: "03_ALL_TIME_BIG"}
+                  changeset = Congestion.changeset(%Congestion{}, congestion_detected)
+                  {:ok, _result} = Repo.insert(changeset)
                 end
 
                 #Calculate average
